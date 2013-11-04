@@ -3,8 +3,8 @@
 // #############################################################################
 // # libnecdecoder.c - NEC IR Library                                          #
 // #############################################################################
-// #              Version: 1.0 - Compiler: AVR-GCC 4.5.3 (Linux)               #
-// #      (c) 2011 by Malte Pöggel - All rights reserved. - License: BSD       #
+// #              Version: 1.1 - Compiler: AVR-GCC 4.5.3 (Linux)               #
+// #      (c) 2013 by Malte Pöggel - All rights reserved. - License: BSD       #
 // #               www.MALTEPOEGGEL.de - malte@maltepoeggel.de                 #
 // #############################################################################
 // #   Redistribution and use in source and binary forms, with or without mo-  #
@@ -35,7 +35,12 @@
 
  volatile uint8_t ir_state;
  volatile uint8_t ir_bitctr;
+ #ifdef PROTOCOL_NEC_EXTENDED
+ volatile uint8_t ir_tmp_address_l;
+ volatile uint8_t ir_tmp_address_h;
+ #else
  volatile uint8_t ir_tmp_address;
+ #endif
  volatile uint8_t ir_tmp_command;
  volatile uint8_t ir_tmp_keyhold;
  volatile uint8_t ir_tmp_ovf;
@@ -45,6 +50,7 @@
  void ir_init( void )
   {
    // tAGC_burst = 9ms, tBIT = 0.56ms
+   #if defined (__AVR_ATmega48__) || defined(__AVR_ATmega88__) || defined(__AVR_ATmega168__)
    // Timer: 8bit, Clock: 8MHz, Prescaler 1024, Overflow = 32.768ms, Tick = 0.128ms
    TCCR0A &= ~( (1<<COM0A0) | (1<<COM0A1) | (1<<COM0B0) | (1<<COM0B1) | (1<<WGM00) | (1<<WGM01) );
    TCCR0B |= (1<<CS00) | (1<<CS02);
@@ -54,7 +60,20 @@
    DDRD   &= ~(1<<PD2);
    EICRA  |= (1<<ISC00);
    EIMSK  |= (1<<INT0);
-   
+   #elif defined (__AVR_ATtiny2313__) || (__AVR_ATtiny4313__)
+   // Timer: 8bit, Clock: 8MHz, Prescaler 1024, Overflow = 32.768ms, Tick = 0.128ms
+   TCCR0A &= ~( (1<<COM0A0) | (1<<COM0A1) | (1<<COM0B0) | (1<<COM0B1) | (1<<WGM00) | (1<<WGM01) );
+   TCCR0B |= (1<<CS00) | (1<<CS02);
+   TIMSK  |= (1<<TOIE0);
+
+   // Interrupt 0 (PD2): Inverted signal input, triggered by logical change
+   DDRD   &= ~(1<<PD2);
+   MCUCR  |= (1<<ISC00);
+   GIMSK  |= (1<<INT0);
+   #else
+   #warning "MCU not supported"
+   #endif   
+
    // Reset state
    ir_state = IR_BURST;
    
@@ -71,8 +90,17 @@
  void ir_stop( void )
   {
    // Stop timer and disable interrupt
+   #if defined (__AVR_ATmega48__) || defined(__AVR_ATmega88__) || defined(__AVR_ATmega168__)
    TCCR0B &= ~((1<<CS00) | (1<<CS02));
+   TIMSK0 &= ~(1<<TOIE0);
    EIMSK  &= ~(1<<INT0);
+   #elif defined (__AVR_ATtiny2313__) || (__AVR_ATtiny4313__)
+   TCCR0B &= ~((1<<CS00) | (1<<CS02));
+   TIMSK  &= ~(1<<TOIE0);
+   GIMSK  &= ~(1<<INT0);
+   #else
+   #warning "MCU not supported"
+   #endif   
   }
 
 
@@ -83,14 +111,14 @@
    uint8_t port_state = ( PIND & (1<<PD2) );
    uint8_t cnt_state = TCNT0;
 
-  if(ir_tmp_ovf!=0)
-   {
-    // Overflow, so reset and ignore.
-    ir_tmp_ovf = 0;
-    ir_state = IR_BURST;
-    TCNT0 = 0;
-    return;
-   }
+   if(ir_tmp_ovf!=0)
+    {
+     // Overflow, so reset and ignore.
+     ir_tmp_ovf = 0;
+     ir_state = IR_BURST;
+     TCNT0 = 0;
+     return;
+    }
 
    switch(ir_state)
     {
@@ -101,7 +129,7 @@
        } else {
         if((cnt_state>TIME_BURST_MIN)&&(cnt_state<TIME_BURST_MAX))
          {
-          ir_state = IR_GAP; // Next state      
+          ir_state = IR_GAP; // Next state
           TCNT0 = 0; // Reset counter   
          }
        }     
@@ -125,6 +153,7 @@
               ir_tmp_keyhold = IR_HOLD_OVF;
              }
             ir_state = IR_BURST;
+            break;
            }    
        }
       // Should not happen, must be invalid. Reset.
@@ -145,7 +174,11 @@
         if((cnt_state>TIME_ZERO_MIN)&&(cnt_state<TIME_ZERO_MAX))
          {
           // 0
+          #ifdef PROTOCOL_NEC_EXTENDED
+          ir_tmp_address_l &= ~(1<<ir_bitctr++);
+          #else
           ir_tmp_address &= ~(1<<ir_bitctr++);
+          #endif 
           TCNT0 = 0; // Reset counter
           if(ir_bitctr>=8)
            {
@@ -157,7 +190,11 @@
           if((cnt_state>TIME_ONE_MIN)&&(cnt_state<TIME_ONE_MAX))
            {
             // 1
+            #ifdef PROTOCOL_NEC_EXTENDED
+            ir_tmp_address_l |= (1<<ir_bitctr++);
+            #else
             ir_tmp_address |= (1<<ir_bitctr++);
+            #endif
             TCNT0 = 0; // Reset counter
             if(ir_bitctr>=8)
              {
@@ -185,13 +222,17 @@
        } else {
         if((cnt_state>TIME_ZERO_MIN)&&(cnt_state<TIME_ZERO_MAX))
          {
-          // 0 (inverted)
+          // 0 (inverted) or high address
+          #ifdef PROTOCOL_NEC_EXTENDED
+          ir_tmp_address_h &= ~(1<<ir_bitctr++);
+          #else
           if(!(ir_tmp_address&(1<<ir_bitctr++))) 
            {
             // Should not happen, must be invalid. Reset.
             ir_state = IR_BURST;
             break;
            }
+          #endif 
           TCNT0 = 0; // Reset counter
           if(ir_bitctr>=8)
            {
@@ -202,13 +243,17 @@
          } else
           if((cnt_state>TIME_ONE_MIN)&&(cnt_state<TIME_ONE_MAX))
            {
-            // 1 (inverted)
+            // 1 (inverted) or high address
+            #ifdef PROTOCOL_NEC_EXTENDED
+            ir_tmp_address_h |= (1<<ir_bitctr++);
+            #else
             if(ir_tmp_address&(1<<ir_bitctr++)) 
              {
               // Should not happen, must be invalid. Reset.
               ir_state = IR_BURST;
               break;
              }
+            #endif
             TCNT0 = 0; // Reset counter
             if(ir_bitctr>=8)
              {
@@ -288,9 +333,20 @@
           if(ir_bitctr>=8)
            {
             ir_state = IR_BURST; // Decoding finished.
-            ir.address = ir_tmp_address;
-            ir.command = ir_tmp_command;            
-            ir.status |= (1<<IR_RECEIVED) | (1<<IR_SIGVALID);
+            // Only apply if received flag is not set, must be done
+            // by the main program after reading address and command
+            if(!(ir.status & (1<<IR_RECEIVED)))
+             {
+              #ifdef PROTOCOL_NEC_EXTENDED
+              ir.address_l = ir_tmp_address_l;
+              ir.address_h = ir_tmp_address_h;
+              #else
+              ir.address = ir_tmp_address;
+              #endif
+              ir.command = ir_tmp_command;
+              ir.status |= (1<<IR_RECEIVED) | (1<<IR_SIGVALID);
+              ir_tmp_keyhold = IR_HOLD_OVF; // To make shure that valid flag is cleared
+             }
             ir_bitctr = 0; // Reset bitcounter
            }
           break;
@@ -308,9 +364,20 @@
             if(ir_bitctr>=8)
              {
               ir_state = IR_BURST; // Decoding finished.
-              ir.address = ir_tmp_address;
-              ir.command = ir_tmp_command;            
-              ir.status |= (1<<IR_RECEIVED) | (1<<IR_SIGVALID);
+              // Only apply if received flag is not set, must be done
+              // by the main program after reading address and command
+              if(!(ir.status & (1<<IR_RECEIVED)))
+               {
+                #ifdef PROTOCOL_NEC_EXTENDED
+                ir.address_l = ir_tmp_address_l;
+                ir.address_h = ir_tmp_address_h;
+                #else
+                ir.address = ir_tmp_address;
+                #endif
+                ir.command = ir_tmp_command;
+                ir.status |= (1<<IR_RECEIVED) | (1<<IR_SIGVALID);
+                ir_tmp_keyhold = IR_HOLD_OVF; // To make shure that valid flag is cleared
+               }
               ir_bitctr = 0; // Reset bitcounter
              }
             break;

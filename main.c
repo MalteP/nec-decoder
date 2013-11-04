@@ -3,8 +3,8 @@
 // #############################################################################
 // # main.c - Testcode for IR Library                                          #
 // #############################################################################
-// #              Version: 1.0 - Compiler: AVR-GCC 4.5.3 (Linux)               #
-// #      (c) 2011 by Malte Pöggel - All rights reserved. - License: BSD       #
+// #              Version: 1.1 - Compiler: AVR-GCC 4.5.3 (Linux)               #
+// #      (c) 2013 by Malte Pöggel - All rights reserved. - License: BSD       #
 // #               www.MALTEPOEGGEL.de - malte@maltepoeggel.de                 #
 // #############################################################################
 // #   Redistribution and use in source and binary forms, with or without mo-  #

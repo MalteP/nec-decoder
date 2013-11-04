@@ -3,8 +3,8 @@
 // #############################################################################
 // # libnecdecoder.c - Header: NEC IR Library                                  #
 // #############################################################################
-// #              Version: 1.0 - Compiler: AVR-GCC 4.5.3 (Linux)               #
-// #      (c) 2011 by Malte Pöggel - All rights reserved. - License: BSD       #
+// #              Version: 1.1 - Compiler: AVR-GCC 4.5.3 (Linux)               #
+// #      (c) 2013 by Malte Pöggel - All rights reserved. - License: BSD       #
 // #               www.MALTEPOEGGEL.de - malte@maltepoeggel.de                 #
 // #############################################################################
 // #   Redistribution and use in source and binary forms, with or without mo-  #
@@ -32,6 +32,9 @@
 #ifndef LIBNECDECODER_H
  #define LIBNECDECODER_H
  
+ // Uncomment this to enable extended NEC protocol support.
+ //#define PROTOCOL_NEC_EXTENDED
+
  // AGC Burst, 9ms typ
  #define TIME_BURST_MIN 65
  #define TIME_BURST_MAX 75
@@ -65,12 +68,17 @@
  #define IR_SIGVALID 2 // Valid signal (Internal used)
  
  // Timer Overflows till keyhold flag is cleared
- #define IR_HOLD_OVF 5 
+ #define IR_HOLD_OVF 5
  
  // Struct definition
  struct ir_struct
   {
+   #ifdef PROTOCOL_NEC_EXTENDED
+   uint8_t address_l;
+   uint8_t address_h;
+   #else
    uint8_t address;
+   #endif
    uint8_t command;
    uint8_t status;
   };
