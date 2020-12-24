@@ -12,7 +12,7 @@ F_CPU = 8000000
 FORMAT = ihex
 TARGET = main
 
-SRC = libs/libnecdecoder.c $(TARGET).c
+SRC = libnecdecoder.c $(TARGET).c
 
 
 ASRC = 

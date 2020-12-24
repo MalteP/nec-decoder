@@ -30,7 +30,7 @@
 // #############################################################################
 
  #include <avr/io.h>
- #include "libs/libnecdecoder.h"
+ #include "libnecdecoder.h"
  #include "main.h"
 
  // Demo code description:
