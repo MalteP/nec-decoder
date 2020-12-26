@@ -3,8 +3,8 @@
 // #############################################################################
 // # libnecdecoder.c - NEC IR Library                                          #
 // #############################################################################
-// #              Version: 1.2 - Compiler: AVR-GCC 4.8.2 (Linux)               #
-// #    (c) '13-'14 by Malte Pöggel - All rights reserved. - License: BSD      #
+// #              Version: 1.3 - Compiler: AVR-GCC 10.2.0 (Linux)              #
+// #    (c) '13-'20 by Malte Pöggel - All rights reserved. - License: BSD      #
 // #                  www.MALTEPOEGGEL.de - malte@poeggel.de                   #
 // #############################################################################
 // #   Redistribution and use in source and binary forms, with or without mo-  #
@@ -33,6 +33,8 @@
  #include <avr/interrupt.h>
  #include "libnecdecoder.h"
 
+ void ir_reset_counter( void );
+
  volatile uint8_t ir_state;
  volatile uint8_t ir_bitctr;
  #ifdef PROTOCOL_NEC_EXTENDED
@@ -44,26 +46,22 @@
  volatile uint8_t ir_tmp_command;
  volatile uint8_t ir_tmp_keyhold;
  volatile uint8_t ir_tmp_ovf;
+ volatile struct ir_struct ir;
 
 
- // ###### Initializes ir function ######
+ // ###### Initializes IR function ######
  void ir_init( void )
   {
-   // tAGC_burst = 9ms, tBIT = 0.56ms
-   #if defined (__AVR_ATmega48__) || defined(__AVR_ATmega88__) || defined(__AVR_ATmega168__)
+   #if defined (__AVR_ATmega48__) || defined (__AVR_ATmega48A__) || defined (__AVR_ATmega48P__) || defined (__AVR_ATmega48PA__) || defined (__AVR_ATmega88__) || defined (__AVR_ATmega88A__) || defined (__AVR_ATmega88P__) || defined (__AVR_ATmega88PA__) || defined (__AVR_ATmega168__) || defined (__AVR_ATmega168A__) || defined (__AVR_ATmega168P__) || defined (__AVR_ATmega168PA__) || defined (__AVR_ATmega328__) || defined (__AVR_ATmega328P__)
 
    #ifndef USE_16BIT_TIMER1
-   // Timer: 8bit, Clock: 8MHz, Prescaler 1024, Overflow = 32.768ms, Tick = 0.128ms
    TCCR0A &= ~( (1<<COM0A0) | (1<<COM0A1) | (1<<COM0B0) | (1<<COM0B1) | (1<<WGM00) | (1<<WGM01) );
-   TCCR0B |= (1<<CS00) | (1<<CS02);
+   TCCR0B |= (TIMER_PRESCALER==1024?(1<<CS00):0) | (1<<CS02);
    TIMSK0 |= (1<<TOIE0);
    #else
-   // Timer: 16bit, Clock: 8MHz, Prescaler 1024, Overflow = 32.768ms (with preload), Tick = 0.128ms
    TCCR1A &= ~( (1<<COM0A0) | (1<<COM0A1) | (1<<COM0B0) | (1<<COM0B1) | (1<<WGM00) | (1<<WGM01) );
-   TCCR1B |= (1<<CS10) | (1<<CS12);
-   TIMSK1 |= (1<<TOIE1);
+   TCCR1B |= (TIMER_PRESCALER==1024?(1<<CS10):0) | (1<<CS12);
    #endif
-
    #ifndef USE_INT1
    // Interrupt 0 (PD2): Inverted signal input, triggered by logical change
    DDRD   &= ~(1<<PD2);
@@ -76,19 +74,17 @@
    EIMSK  |= (1<<INT1);
    #endif
 
-   #elif defined (__AVR_ATtiny2313__) || (__AVR_ATtiny4313__)
+   #elif defined (__AVR_ATtiny2313__) || defined (__AVR_ATtiny2313A__) || defined (__AVR_ATtiny4313__)
+
    #ifndef USE_16BIT_TIMER1
-   // Timer: 8bit, Clock: 8MHz, Prescaler 1024, Overflow = 32.768ms, Tick = 0.128ms
    TCCR0A &= ~( (1<<COM0A0) | (1<<COM0A1) | (1<<COM0B0) | (1<<COM0B1) | (1<<WGM00) | (1<<WGM01) );
-   TCCR0B |= (1<<CS00) | (1<<CS02);
+   TCCR0B |= (TIMER_PRESCALER==1024?(1<<CS00):0) | (1<<CS02);
    TIMSK  |= (1<<TOIE0);
    #else
-   // Timer: 16bit, Clock: 8MHz, Prescaler 1024, Overflow = 32.768ms (with preload), Tick = 0.128ms
    TCCR1A &= ~( (1<<COM0A0) | (1<<COM0A1) | (1<<COM0B0) | (1<<COM0B1) | (1<<WGM00) | (1<<WGM01) );
-   TCCR1B |= (1<<CS10) | (1<<CS12);
+   TCCR1B |= (TIMER_PRESCALER==1024?(1<<CS10):0) | (1<<CS12);
    TIMSK  |= (1<<TOIE1);
    #endif
-
    #ifndef USE_INT1
    // Interrupt 0 (PD2): Inverted signal input, triggered by logical change
    DDRD   &= ~(1<<PD2);
@@ -102,7 +98,7 @@
    #endif
 
    #else
-   #warning "MCU not supported"
+   #error "MCU not supported"
    #endif
 
    // Reset state
@@ -113,12 +109,7 @@
    ir_tmp_ovf = 0;
 
    // Initialize timer
-   #ifndef USE_16BIT_TIMER1
-   TCNT0 = 0;
-   #else
-   TCNT1H = 0xFF;
-   TCNT1L = 0x00;
-   #endif
+   ir_reset_counter();
 
    // Global interrupt enable
    sei();
@@ -129,19 +120,22 @@
  void ir_stop( void )
   {
    // Stop timer and disable interrupt
-   #if defined (__AVR_ATmega48__) || defined(__AVR_ATmega88__) || defined(__AVR_ATmega168__)
+   #if defined (__AVR_ATmega48__) || defined (__AVR_ATmega48A__) || defined (__AVR_ATmega48P__) || defined (__AVR_ATmega48PA__) || defined (__AVR_ATmega88__) || defined (__AVR_ATmega88A__) || defined (__AVR_ATmega88P__) || defined (__AVR_ATmega88PA__) || defined (__AVR_ATmega168__) || defined (__AVR_ATmega168A__) || defined (__AVR_ATmega168P__) || defined (__AVR_ATmega168PA__) || defined (__AVR_ATmega328__) || defined (__AVR_ATmega328P__)
+
    TCCR0B &= ~((1<<CS00) | (1<<CS02));
    #ifndef USE_16BIT_TIMER1
    TIMSK0 &= ~(1<<TOIE0);
    #else
-   TIMSK1  &= ~(1<<TOIE1);
+   TIMSK1 &= ~(1<<TOIE1);
    #endif
    #ifndef USE_INT1
    EIMSK  &= ~(1<<INT0);
    #else
    EIMSK  &= ~(1<<INT1);
    #endif
-   #elif defined (__AVR_ATtiny2313__) || (__AVR_ATtiny4313__)
+
+   #elif defined (__AVR_ATtiny2313__) || defined (__AVR_ATtiny2313A__) || defined (__AVR_ATtiny4313__)
+
    TCCR0B &= ~((1<<CS00) | (1<<CS02));
    #ifndef USE_16BIT_TIMER1
    TIMSK  &= ~(1<<TOIE0);
@@ -153,8 +147,9 @@
    #else
    GIMSK  &= ~(1<<INT1);
    #endif
+
    #else
-   #warning "MCU not supported"
+   #error "MCU not supported"
    #endif
   }
 
@@ -184,12 +179,7 @@
      // Overflow, so reset and ignore.
      ir_tmp_ovf = 0;
      ir_state = IR_BURST;
-     #ifndef USE_16BIT_TIMER1
-     TCNT0 = 0;
-     #else
-     TCNT1H = 0xFF;
-     TCNT1L = 0x00;
-     #endif
+     ir_reset_counter();
      return;
     }
 
@@ -198,22 +188,12 @@
      case IR_BURST:
       if(!port_state)
        {
-        #ifndef USE_16BIT_TIMER1 // Reset counter
-        TCNT0 = 0;
-        #else
-        TCNT1H = 0xFF;
-        TCNT1L = 0x00;
-        #endif
+        ir_reset_counter();
        } else {
         if((cnt_state>TIME_BURST_MIN)&&(cnt_state<TIME_BURST_MAX))
          {
           ir_state = IR_GAP; // Next state
-          #ifndef USE_16BIT_TIMER1 // Reset counter
-          TCNT0 = 0;
-          #else
-          TCNT1H = 0xFF;
-          TCNT1L = 0x00;
-          #endif
+          ir_reset_counter();
          }
        }
       break;
@@ -222,12 +202,7 @@
        {
         if((cnt_state>TIME_GAP_MIN)&&(cnt_state<TIME_GAP_MAX))
          {
-          #ifndef USE_16BIT_TIMER1 // Reset counter
-          TCNT0 = 0;
-          #else
-          TCNT1H = 0xFF;
-          TCNT1L = 0x00;
-          #endif
+          ir_reset_counter();
           ir_state = IR_ADDRESS; // Next state
           ir_bitctr = 0; // Reset bitcounter
           ir.status &= ~(1<<IR_KEYHOLD);
@@ -253,12 +228,7 @@
         // Must be short pulse
         if((cnt_state>TIME_PULSE_MIN)&&(cnt_state<TIME_PULSE_MAX))
          {
-          #ifndef USE_16BIT_TIMER1 // Reset counter
-          TCNT0 = 0;
-          #else
-          TCNT1H = 0xFF;
-          TCNT1L = 0x00;
-          #endif
+          ir_reset_counter();
           break;
          }
         // Should not happen, must be invalid. Reset.
@@ -272,19 +242,14 @@
           #else
           ir_tmp_address &= ~(1<<ir_bitctr++);
           #endif
-          #ifndef USE_16BIT_TIMER1 // Reset counter
-          TCNT0 = 0;
-          #else
-          TCNT1H = 0xFF;
-          TCNT1L = 0x00;
-          #endif
+          ir_reset_counter();
           if(ir_bitctr>=8)
            {
             ir_state = IR_ADDRESS_INV; // Next state
             ir_bitctr = 0; // Reset bitcounter
            }
           break;
-         } else
+         } else {
           if((cnt_state>TIME_ONE_MIN)&&(cnt_state<TIME_ONE_MAX))
            {
             // 1
@@ -293,12 +258,7 @@
             #else
             ir_tmp_address |= (1<<ir_bitctr++);
             #endif
-            #ifndef USE_16BIT_TIMER1 // Reset counter
-            TCNT0 = 0;
-            #else
-            TCNT1H = 0xFF;
-            TCNT1L = 0x00;
-            #endif
+            ir_reset_counter();
             if(ir_bitctr>=8)
              {
               ir_state = IR_ADDRESS_INV; // Next state
@@ -306,9 +266,10 @@
              }
             break;
            }
-          // Should not happen, must be invalid. Reset.
-          ir_state = IR_BURST;
-         break;
+         }
+        // Should not happen, must be invalid. Reset.
+        ir_state = IR_BURST;
+        break;
        }
       break;
      case IR_ADDRESS_INV:
@@ -317,12 +278,7 @@
         // Must be short pulse
         if((cnt_state>TIME_PULSE_MIN)&&(cnt_state<TIME_PULSE_MAX))
          {
-          #ifndef USE_16BIT_TIMER1 // Reset counter
-          TCNT0 = 0;
-          #else
-          TCNT1H = 0xFF;
-          TCNT1L = 0x00;
-          #endif
+          ir_reset_counter();
           break;
          }
         // Should not happen, must be invalid. Reset.
@@ -341,19 +297,14 @@
             break;
            }
           #endif
-          #ifndef USE_16BIT_TIMER1 // Reset counter
-          TCNT0 = 0;
-          #else
-          TCNT1H = 0xFF;
-          TCNT1L = 0x00;
-          #endif
+          ir_reset_counter();
           if(ir_bitctr>=8)
            {
             ir_state = IR_COMMAND; // Next state
             ir_bitctr = 0; // Reset bitcounter
            }
           break;
-         } else
+         } else {
           if((cnt_state>TIME_ONE_MIN)&&(cnt_state<TIME_ONE_MAX))
            {
             // 1 (inverted) or high address
@@ -367,12 +318,7 @@
               break;
              }
             #endif
-            #ifndef USE_16BIT_TIMER1 // Reset counter
-            TCNT0 = 0;
-            #else
-            TCNT1H = 0xFF;
-            TCNT1L = 0x00;
-            #endif
+            ir_reset_counter();
             if(ir_bitctr>=8)
              {
               ir_state = IR_COMMAND; // Next state
@@ -380,9 +326,10 @@
              }
             break;
            }
-          // Should not happen, must be invalid. Reset.
-          ir_state = IR_BURST;
-         break;
+         }
+        // Should not happen, must be invalid. Reset.
+        ir_state = IR_BURST;
+        break;
        }
       break;
      case IR_COMMAND:
@@ -391,12 +338,7 @@
         // Must be short pulse
         if((cnt_state>TIME_PULSE_MIN)&&(cnt_state<TIME_PULSE_MAX))
          {
-          #ifndef USE_16BIT_TIMER1 // Reset counter
-          TCNT0 = 0;
-          #else
-          TCNT1H = 0xFF;
-          TCNT1L = 0x00;
-          #endif
+          ir_reset_counter();
           break;
          }
         // Should not happen, must be invalid. Reset.
@@ -406,29 +348,19 @@
          {
           // 0
           ir_tmp_command &= ~(1<<ir_bitctr++);
-          #ifndef USE_16BIT_TIMER1 // Reset counter
-          TCNT0 = 0;
-          #else
-          TCNT1H = 0xFF;
-          TCNT1L = 0x00;
-          #endif
+          ir_reset_counter();
           if(ir_bitctr>=8)
            {
             ir_state = IR_COMMAND_INV; // Next state
             ir_bitctr = 0; // Reset bitcounter
            }
           break;
-         } else
+         } else {
           if((cnt_state>TIME_ONE_MIN)&&(cnt_state<TIME_ONE_MAX))
            {
             // 1
             ir_tmp_command |= (1<<ir_bitctr++);
-            #ifndef USE_16BIT_TIMER1 // Reset counter
-            TCNT0 = 0;
-            #else
-            TCNT1H = 0xFF;
-            TCNT1L = 0x00;
-            #endif
+            ir_reset_counter();
             if(ir_bitctr>=8)
              {
               ir_state = IR_COMMAND_INV; // Next state
@@ -436,9 +368,10 @@
              }
             break;
            }
-          // Should not happen, must be invalid. Reset.
-          ir_state = IR_BURST;
-         break;
+         }
+        // Should not happen, must be invalid. Reset.
+        ir_state = IR_BURST;
+        break;
        }
       break;
      case IR_COMMAND_INV:
@@ -447,12 +380,7 @@
         // Must be short pulse
         if((cnt_state>TIME_PULSE_MIN)&&(cnt_state<TIME_PULSE_MAX))
          {
-          #ifndef USE_16BIT_TIMER1 // Reset counter
-          TCNT0 = 0;
-          #else
-          TCNT1H = 0xFF;
-          TCNT1L = 0x00;
-          #endif
+          ir_reset_counter();
           break;
          }
         // Should not happen, must be invalid. Reset.
@@ -467,12 +395,7 @@
             ir_state = IR_BURST;
             break;
            }
-          #ifndef USE_16BIT_TIMER1 // Reset counter
-          TCNT0 = 0;
-          #else
-          TCNT1H = 0xFF;
-          TCNT1L = 0x00;
-          #endif
+          ir_reset_counter();
           if(ir_bitctr>=8)
            {
             ir_state = IR_BURST; // Decoding finished.
@@ -488,12 +411,12 @@
               #endif
               ir.command = ir_tmp_command;
               ir.status |= (1<<IR_RECEIVED) | (1<<IR_SIGVALID);
-              ir_tmp_keyhold = IR_HOLD_OVF; // To make shure that valid flag is cleared
+              ir_tmp_keyhold = IR_HOLD_OVF; // To make sure that valid flag is cleared
              }
             ir_bitctr = 0; // Reset bitcounter
            }
           break;
-         } else
+         } else {
           if((cnt_state>TIME_ONE_MIN)&&(cnt_state<TIME_ONE_MAX))
            {
             // 1 (inverted)
@@ -503,12 +426,7 @@
               ir_state = IR_BURST;
               break;
              }
-            #ifndef USE_16BIT_TIMER1 // Reset counter
-            TCNT0 = 0;
-            #else
-            TCNT1H = 0xFF;
-            TCNT1L = 0x00;
-            #endif
+            ir_reset_counter();
             if(ir_bitctr>=8)
              {
               ir_state = IR_BURST; // Decoding finished.
@@ -524,15 +442,16 @@
                 #endif
                 ir.command = ir_tmp_command;
                 ir.status |= (1<<IR_RECEIVED) | (1<<IR_SIGVALID);
-                ir_tmp_keyhold = IR_HOLD_OVF; // To make shure that valid flag is cleared
+                ir_tmp_keyhold = IR_HOLD_OVF; // To make sure that valid flag is cleared
                }
               ir_bitctr = 0; // Reset bitcounter
              }
             break;
            }
-          // Should not happen, must be invalid. Reset.
-          ir_state = IR_BURST;
-         break;
+         }
+        // Should not happen, must be invalid. Reset.
+        ir_state = IR_BURST;
+        break;
        }
       break;
     }
@@ -547,12 +466,7 @@
  #endif
   {
    // Reset timer
-   #ifndef USE_16BIT_TIMER1
-   TCNT0 = 0;
-   #else
-   TCNT1H = 0xFF;
-   TCNT1L = 0x00;
-   #endif
+   ir_reset_counter();
    // Handle overflow
    ir_tmp_ovf = 1;
    if(ir_tmp_keyhold>0)
@@ -560,4 +474,16 @@
      ir_tmp_keyhold--;
      if(ir_tmp_keyhold==0) ir.status &= ~((1<<IR_KEYHOLD) | (1<<IR_SIGVALID));
     }
+  }
+
+
+ // ###### Reset counter register value ######
+ void ir_reset_counter( void )
+  {
+   #ifndef USE_16BIT_TIMER1
+   TCNT0 = 0;
+   #else
+   TCNT1H = 0xFF;
+   TCNT1L = 0x00;
+   #endif
   }

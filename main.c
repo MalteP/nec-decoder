@@ -3,9 +3,9 @@
 // #############################################################################
 // # main.c - Testcode for IR Library                                          #
 // #############################################################################
-// #              Version: 1.1 - Compiler: AVR-GCC 4.5.3 (Linux)               #
-// #      (c) 2013 by Malte Pöggel - All rights reserved. - License: BSD       #
-// #               www.MALTEPOEGGEL.de - malte@maltepoeggel.de                 #
+// #              Version: 1.3 - Compiler: AVR-GCC 10.2.0 (Linux)              #
+// #    (c) '13-'20 by Malte Pöggel - All rights reserved. - License: BSD      #
+// #                  www.MALTEPOEGGEL.de - malte@poeggel.de                   #
 // #############################################################################
 // #   Redistribution and use in source and binary forms, with or without mo-  #
 // # dification, are permitted provided that the following conditions are met: #
@@ -19,7 +19,7 @@
 // #    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS    #
 // # "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED #
 // #      TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A      #
-// #     PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT    # 
+// #     PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT    #
 // #   HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,  #
 // # SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED  #
 // #    TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA,    #
@@ -47,17 +47,26 @@
    PORTB &= ~( (1<<PB0) | (1<<PB1) );
 
    // Init UART (8N1)
+   #if defined (__AVR_ATmega48__) || defined (__AVR_ATmega48A__) || defined (__AVR_ATmega48P__) || defined (__AVR_ATmega48PA__) || defined (__AVR_ATmega88__) || defined (__AVR_ATmega88A__) || defined (__AVR_ATmega88P__) || defined (__AVR_ATmega88PA__) || defined (__AVR_ATmega168__) || defined (__AVR_ATmega168A__) || defined (__AVR_ATmega168P__) || defined (__AVR_ATmega168PA__) || defined (__AVR_ATmega328__) || defined (__AVR_ATmega328P__)
    UBRR0 = UBRR_VAL;
    UCSR0B |= (1<<TXEN0);
    UCSR0C = (1<<UCSZ01)|(1<<UCSZ00);
+   #elif defined (__AVR_ATtiny2313__) || defined (__AVR_ATtiny2313A__) || defined (__AVR_ATtiny4313__)
+   UBRRH = (uint8_t) (UBRR_VAL>>8);
+   UBRRL = (uint8_t) UBRR_VAL;
+   UCSRB |= (1<<TXEN);
+   UCSRC = (1<<UCSZ1)|(1<<UCSZ0);
+   #else
+   #error "MCU not supported"
+   #endif
 
    // Initialize IR lib
    ir_init();
- 
-   uart_putstring("NEC Library Demo 1.0\r\n");
-   uart_putstring("(c) 2011 by Malte Pöggel - www.maltepoeggel.de - malte@maltepoeggel.de\r\n");
-   uart_putstring("Receiver is now ready to rock ;-)\r\n");
-   uart_putstring("\r\n");  
+
+   uart_putstring("libnecdecoder v1.3 Demo\r\n");
+   uart_putstring("(c) '13-'20 by Malte Pöggel - www.MALTEPOEGGEL.de - malte@poeggel.de\r\n");
+   uart_putstring("Receiver ready, please press a key :-)\r\n");
+   uart_putstring("\r\n");
 
    while(1)
     {
@@ -66,33 +75,48 @@
       {
        // Toggle LED
        PORTB ^= (1<<PB0);
-      
+
        // Send address and command to UART
        uart_putstring("Address: ");
-       uart_put8int(ir.address);
+       #ifdef PROTOCOL_NEC_EXTENDED
+       uart_puthex(ir.address_l);
+       uart_putchar(' ');
+       uart_puthex(ir.address_h);
+       #else
+       uart_puthex(ir.address);
+       #endif
        uart_putstring(", Command: ");
-       uart_put8int(ir.command);       
-       uart_putstring("\r\n");      
+       uart_puthex(ir.command);
+       uart_putstring("\r\n");
 
        // Reset state
        ir.status &= ~(1<<IR_RECEIVED);
       }
 
-     // Check hold flag   
+     // Check hold flag
      if(ir.status & (1<<IR_KEYHOLD))
       PORTB |= (1<<PB1);
        else PORTB &= ~(1<<PB1);
     }
   }
 
- 
+
  // ###### Send single character via UART ######
  void uart_putchar( char x )
   {
+   #if defined (__AVR_ATmega48__) || defined (__AVR_ATmega48A__) || defined (__AVR_ATmega48P__) || defined (__AVR_ATmega48PA__) || defined (__AVR_ATmega88__) || defined (__AVR_ATmega88A__) || defined (__AVR_ATmega88P__) || defined (__AVR_ATmega88PA__) || defined (__AVR_ATmega168__) || defined (__AVR_ATmega168A__) || defined (__AVR_ATmega168P__) || defined (__AVR_ATmega168PA__) || defined (__AVR_ATmega328__) || defined (__AVR_ATmega328P__)
    while (!(UCSR0A & (1<<UDRE0)))
     {
     }
    UDR0 = x;
+   #elif defined (__AVR_ATtiny2313__) || defined (__AVR_ATtiny2313A__) || defined (__AVR_ATtiny4313__)
+   while (!(UCSRA & (1<<UDRE)))
+    {
+    }
+   UDR = x;
+   #else
+   #error "MCU not supported"
+   #endif
   }
 
 
@@ -107,10 +131,14 @@
   }
 
 
- // ###### Send 8bit int via UART ######
- void uart_put8int( uint8_t i )
+ // ###### Send 8bit as hex int via UART ######
+ void uart_puthex( uint8_t i )
   {
-    uart_putchar('0'+((i / 100) % 10));
-    uart_putchar('0'+((i / 10) % 10));
-    uart_putchar('0'+(i % 10));
+   uint8_t tmp;
+   tmp = ((i>>4)&0x0F);
+   if(tmp>=10) tmp+=7;
+   uart_putchar('0'+tmp);
+   tmp = (i&0x0F);
+   if(tmp>=10) tmp+=7;
+   uart_putchar('0'+tmp);
   }
